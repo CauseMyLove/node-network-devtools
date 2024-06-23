@@ -1,10 +1,15 @@
-import { Server, WebSocket } from 'ws'
 import open, { apps } from 'open'
 import { type ChildProcess } from 'child_process'
-import { IS_DEV_MODE, RequestDetail } from '../common'
-import { REMOTE_DEBUGGER_PORT } from '../common'
 import { RequestHeaderPipe } from './pipe'
 import { log } from '../utils'
+import { Server, WebSocket } from 'ws'
+import {
+  DebuggerJSON,
+  IS_DEV_MODE,
+  REMOTE_DEBUGGER_ID,
+  RequestDetail,
+  REMOTE_DEBUGGER_PORT
+} from '../common'
 
 export interface DevtoolServerInitOptions {
   port: number
@@ -65,50 +70,70 @@ export class DevtoolServer {
   public async open() {
     const url = `devtools://devtools/bundled/inspector.html?ws=localhost:${this.port}`
 
-    if (IS_DEV_MODE) {
-      log(`In dev mode, open chrome devtool manually: ${url}`)
-      return
-    }
+    // if (IS_DEV_MODE) {
+    //   log(`In dev mode, open chrome devtool manually: ${url}`)
+    //   return
+    // }
 
-    const pro = await open(url, {
-      app: {
-        name: apps.chrome,
-        arguments: [
-          process.platform !== 'darwin' ? `--remote-debugging-port=${REMOTE_DEBUGGER_PORT}` : ''
-        ]
-      }
-    })
+    const getRemoteJSON = async () =>
+      (await fetch(`http://127.0.0.1:${REMOTE_DEBUGGER_PORT}/json`)).json() as unknown as Promise<
+        DebuggerJSON[]
+      >
 
-    if (process.platform !== 'darwin') {
-      const json = await new Promise<{ webSocketDebuggerUrl: string; id: string }[]>((resolve) => {
-        let stop = setInterval(async () => {
-          try {
-            resolve((await fetch(`http://localhost:${REMOTE_DEBUGGER_PORT}/json`)).json())
-            clearInterval(stop)
-          } catch {
-            log('waiting for chrome to open')
-          }
-        }, 500)
-      })
-      const { id, webSocketDebuggerUrl } = json[0]
-      const debuggerWs = new WebSocket(webSocketDebuggerUrl)
-
+    const manageDebuggerWs = (socketUrl: string, command: 'open' | 'close') => {
+      const debuggerWs = new WebSocket(socketUrl)
       debuggerWs.on('open', () => {
-        const navigateCommand = {
-          id,
-          method: 'Page.navigate',
-          params: {
-            url
-          }
-        }
+        const navigateCommand =
+          command === 'open'
+            ? { id: 1, method: 'Page.navigate', params: { url } }
+            : { id: 1, method: 'Page.close' }
+
         debuggerWs.send(JSON.stringify(navigateCommand))
+
         debuggerWs.close()
       })
     }
 
-    log('opened in chrome or click here to open chrome devtool: ', url)
-    this.browser = pro
-    return pro
+    try {
+      const dbHistoryJson = await getRemoteJSON()
+      const idx = dbHistoryJson.findIndex((e) => e.url === url)
+      if (idx !== -1) {
+        console.log('chrome devtool restarting')
+        console.log(dbHistoryJson)
+        manageDebuggerWs(dbHistoryJson[idx].webSocketDebuggerUrl, 'close')
+      }
+    } catch (error) {
+      console.log('\nchrome devtool starting')
+    } finally {
+      const pro = await open(url, {
+        app: {
+          name: apps.chrome,
+          arguments: [
+            process.platform !== 'darwin' ? `--remote-debugging-port=${REMOTE_DEBUGGER_PORT}` : ''
+          ]
+        }
+      })
+
+      if (process.platform !== 'darwin') {
+        const json = await new Promise<DebuggerJSON[]>((resolve) => {
+          let stop = setInterval(async () => {
+            try {
+              resolve(await getRemoteJSON())
+              clearInterval(stop)
+            } catch {
+              console.log('waiting for chrome to open')
+            }
+          }, 500)
+        })
+        console.log(json)
+        const { webSocketDebuggerUrl } = json[0]
+        manageDebuggerWs(webSocketDebuggerUrl, 'open')
+      }
+
+      console.log('opened in chrome or click here to open chrome devtool: ', url)
+      this.browser = pro
+      return pro
+    }
   }
 
   public close() {

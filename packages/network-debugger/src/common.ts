@@ -63,6 +63,12 @@ export class RequestDetail {
     }
   }
 }
+export interface DebuggerJSON {
+  webSocketDebuggerUrl: string
+  url: string
+  id: string
+}
+export const REMOTE_DEBUGGER_ID = 'Y2F1c2VteWxvdmU='
 export const LOCK_FILE = 'request-center.lock'
 export const PORT = Number(process.env.NETWORK_PORT || 5270)
 export const SERVER_PORT = Number(process.env.NETWORK_SERVER_PORT || 5271)
